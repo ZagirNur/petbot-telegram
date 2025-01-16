@@ -1,41 +1,43 @@
 package dev.zagirnur.petbot.sleeping.petbot.context
 
+import com.fasterxml.jackson.annotation.JsonIgnore
 import dev.zagirnur.petbot.sdk.ChatContext
-import java.math.BigDecimal
-import java.time.LocalDateTime
+import dev.zagirnur.petbot.sleeping.petbot.model.Expense
 
-private const val STATE_KEY = "chatState"
 
 data class UserContext(
-    val editingExpenses: MutableList<EditingExpense> = mutableListOf()
+    val editingExpenses: MutableList<Expense> = mutableListOf(),
+    var defaultGroup: Long? = null,
+    var tagToMessageId: MutableMap<String, Long> = mutableMapOf(),
+    var userChatState: String = "",
 ) : ChatContext {
-    private var state: String = ""
 
+    @JsonIgnore
     override fun getState(): String {
-        return state
+        return userChatState
     }
 
+    @JsonIgnore
     override fun setState(state: String?) {
-        this.state = state ?: ""
+        userChatState = state?:""
     }
 
     override fun cleanState() {
-        state = ""
+        userChatState = ""
+    }
+
+    override fun getMessageIdByTag(tag: String): Long? {
+        return tagToMessageId[tag]
+    }
+
+    override fun deleteTag(tag: String?) {
+        tagToMessageId.remove(tag)
+    }
+
+    override fun tagMessageId(tag: String, messageId: Long) {
+        tagToMessageId[tag] = messageId
     }
 
 }
 
-data class EditingExpense(
-    val amount: BigDecimal,
-    val description: String,
-    val paidBy: MutableMap<Long, BigDecimal> = mutableMapOf(),
-    val whoSplitIt: MutableMap<Long, BigDecimal> = mutableMapOf(),
-    var id: Int? = null,
-    val splitType: SplitType = SplitType.EQUALLY,
-    val createdAt: LocalDateTime = LocalDateTime.now(),
-)
 
-enum class SplitType {
-    EQUALLY,
-    BY_AMOUNT,
-}

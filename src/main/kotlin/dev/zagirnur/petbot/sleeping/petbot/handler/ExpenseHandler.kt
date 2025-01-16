@@ -1,19 +1,25 @@
 package dev.zagirnur.petbot.sleeping.petbot.handler
 
 import dev.zagirnur.petbot.sdk.BotSender
-import dev.zagirnur.petbot.sdk.ReplyBuilder.row
-import dev.zagirnur.petbot.sdk.annotations.OnCallback
+import dev.zagirnur.petbot.sdk.BotUtils.getFrom
 import dev.zagirnur.petbot.sdk.annotations.OnMessage
-import dev.zagirnur.petbot.sleeping.petbot.context.EditingExpense
 import dev.zagirnur.petbot.sleeping.petbot.context.UserContext
-import org.springframework.beans.factory.annotation.Autowired
+import dev.zagirnur.petbot.sleeping.petbot.exceptions.UserNotFoundException
+import dev.zagirnur.petbot.sleeping.petbot.model.Expense
+import dev.zagirnur.petbot.sleeping.petbot.service.ExpenseService
+import dev.zagirnur.petbot.sleeping.petbot.service.GroupService
+import dev.zagirnur.petbot.sleeping.petbot.service.UserService
 import org.springframework.stereotype.Component
 import org.telegram.telegrambots.meta.api.objects.Update
-import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup
-import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton
 
 @Component
-class ExpenseHandler {
+class ExpenseHandler(
+    val bot: BotSender,
+    val userService: UserService,
+    val groupService: GroupService,
+    val expenseService: ExpenseService,
+    val groupHandler: GroupHandler,
+) {
 
 
     companion object {
@@ -23,82 +29,61 @@ class ExpenseHandler {
 
     }
 
-    @Autowired
-    lateinit var bot: BotSender
 
     //language=RegExp
     @OnMessage(regexp = """^\w?\s?[\d., ]+\D{0,3}\s.*$""")
     fun onExpense(update: Update, ctx: UserContext) {
-        val userText = update.message.text
+        val amount = update.message.text.split(" ")[0].replace(",", ".").toBigDecimal()
+        val description = update.message.text.split(" ").drop(1).joinToString(" ")
 
-        val amount = userText.split(" ")[0].toBigDecimalOrNull()
-        if (amount == null) {
-            bot.reply(update)
-                .text("Не могу распознать сумму. Попробуйте еще раз.")
-                .send()
+        val user = userService.findByTelegramId(getFrom(update).id)
+            ?: throw UserNotFoundException(getFrom(update).id)
+
+        val defaultGroupId = ctx.defaultGroup ?: run {
+            groupHandler.onGroups(update, ctx)
             return
         }
-        val description = userText.substringAfter(" ")
 
-        ctx.editingExpenses.add(
-            EditingExpense(
-                amount = amount,
-                description = description,
-                paidBy = mutableMapOf(update.message.from.id to amount),
-                whoSplitIt = mutableMapOf(update.message.from.id to amount)
-            )
+        val defaultGroup = groupService.getById(defaultGroupId)
+
+        val newExpense = expenseService.createNew(
+            groupId = defaultGroup.id,
+            amount = amount,
+            description = description,
+            paidBy = mapOf(user.id!! to amount),
+            splitBy = mapOf(user.id!! to amount),
         )
 
-        bot.reply(update)
-            .text("""
-                |Сумма: $amount
-                |Описание: $description
-                |""".trimMargin())
-            .inlineKeyboard(
-                row("Добавить участника", "add_participant"),
-                row("Сохранить", "save_expense")
-            )
-            .send()
+        showExpenseView(update, ctx, newExpense, "Добавлен новый расход\n\n")
     }
 
-    @OnCallback(prefix = "add_participant")
-    fun onAddParticipant(update: Update, ctx: UserContext) {
-        ctx.state = "adding_participant"
+    fun showExpenseView(
+        update: Update,
+        ctx: UserContext,
+        newExpense: Expense,
+        prefix: String
+    ) {
         bot.reply(update)
-            .text("Введите имя участника")
-            .send()
+            .text(
+                """
+                $prefix
+                |Сумма: ${newExpense.amount}
+                |Описание: ${newExpense.description}
+                |Заплатили:
+                |${
+                    newExpense.paidBy.entries.joinToString("\n") {
+                        "${userService.getById(it.key).getViewName()}: ${it.value}"
+                    }
+                }
+                |Участвуют:
+                |${
+                    newExpense.splitBy.entries.joinToString("\n") {
+                        "${userService.getById(it.key).getViewName()}: ${it.value}"
+                    }
+                }
+            """.trimMargin()
+            )
+            .editIfCallbackMessageOrSend()
     }
 
-    @OnMessage(state = "adding_participant")
-    fun onAddingParticipant(update: Update, ctx: UserContext) {
-        val userText = update.message.text
-        val amount = userText.split(" ")[0].toBigDecimalOrNull()
-        if (amount == null) {
-            bot.reply(update)
-                .text("Не могу распознать сумму. Попробуйте еще раз.")
-                .send()
-            return
-        }
-        val description = userText.substringAfter(" ")
-
-        ctx.editingExpenses.add(
-            EditingExpense(
-                amount = amount,
-                description = description,
-                paidBy = mutableMapOf(update.message.from.id to amount),
-                whoSplitIt = mutableMapOf(update.message.from.id to amount)
-            )
-        )
-
-        bot.reply(update)
-            .text("""
-                |Сумма: $amount
-                |Описание: $description
-                |""".trimMargin())
-            .inlineKeyboard(
-                row("Добавить участника", "add_participant"),
-                row("Сохранить", "save_expense")
-            )
-            .send()
-    }
 }

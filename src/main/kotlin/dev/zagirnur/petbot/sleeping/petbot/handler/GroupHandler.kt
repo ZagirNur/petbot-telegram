@@ -1,73 +1,136 @@
 package dev.zagirnur.petbot.sleeping.petbot.handler
 
 import dev.zagirnur.petbot.sdk.BotSender
-import dev.zagirnur.petbot.sdk.ReplyBuilder.btnSwitch
-import dev.zagirnur.petbot.sdk.ReplyBuilder.row
+import dev.zagirnur.petbot.sdk.BotUtils.getFrom
+import dev.zagirnur.petbot.sdk.ReplyBuilder.*
 import dev.zagirnur.petbot.sdk.annotations.OnCallback
 import dev.zagirnur.petbot.sdk.annotations.OnInlineQuery
 import dev.zagirnur.petbot.sdk.annotations.OnMessage
-import dev.zagirnur.petbot.sleeping.petbot.context.EditingExpense
 import dev.zagirnur.petbot.sleeping.petbot.context.UserContext
+import dev.zagirnur.petbot.sleeping.petbot.exceptions.UserNotFoundException
+import dev.zagirnur.petbot.sleeping.petbot.model.Group
 import dev.zagirnur.petbot.sleeping.petbot.service.GroupService
-import org.springframework.beans.factory.annotation.Autowired
+import dev.zagirnur.petbot.sleeping.petbot.service.UserService
 import org.springframework.stereotype.Component
 import org.telegram.telegrambots.meta.api.objects.Update
-import org.telegram.telegrambots.meta.api.objects.inlinequery.inputmessagecontent.InputMessageContent
 import org.telegram.telegrambots.meta.api.objects.inlinequery.inputmessagecontent.InputTextMessageContent
-import org.telegram.telegrambots.meta.api.objects.inlinequery.result.InlineQueryResult
 import org.telegram.telegrambots.meta.api.objects.inlinequery.result.InlineQueryResultArticle
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup
-import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton
 
 @Component
 class GroupHandler(
     var bot: BotSender,
     var groupService: GroupService,
+    private val userService: UserService,
 ) {
-
 
     companion object {
         // button prefixes
-        const val JOIN_GROUP = "JOIN_GROUP"
+        const val BTN_ENTER_NEW_GROUP_NAME = "BTN_ENTER_NEW_GROUP_NAME:"
+        const val BTN_VIEW_ONE_GROUP = "BTN_VIEW_ONE_GROUP:"
+        const val BTN_VIEW_ALL_GROUPS = "BTN_VIEW_ALL_GROUPS:"
+        const val BTN_SET_MAIN_GROUP = "BTN_SET_MAIN_GROUP:"
+        const val BTN_JOIN_GROUP = "BTN_JOIN_GROUP:"
 
         // chat states
-        const val WAITING_FOR_GROUP_NAME = "WAITING_FOR_GROUP_NAME"
+        const val STT_WAITING_NEW_GROUP_NAME = "WAITING_NEW_GROUP_NAME:"
 
     }
 
     @OnMessage(command = "/group")
-    fun onExpense(update: Update, ctx: UserContext) {
-        val groups = groupService.findAllByUserId(update.message.from.id)
+    @OnCallback(prefix = BTN_VIEW_ALL_GROUPS)
+    fun onGroups(update: Update, ctx: UserContext) {
+        val user = userService.findByTelegramId(getFrom(update).id)
+            ?: throw UserNotFoundException(getFrom(update).id)
 
+        val groups = groupService.findAllByUserId(user.id!!)
         if (groups.isEmpty()) {
-            ctx.state = WAITING_FOR_GROUP_NAME
-            bot.reply(update)
-                .text("У тебя нет групп, давай создадим! \nВведите название группы:")
-                .send()
-            return
+            return enterNewGroupName(update, ctx, "Кажется у вас нет групп. \n\n")
         }
+
+        bot.reply(update)
+            .text("Ваши группы:\n\n" + groups.joinToString("\n") { it.name + " " + it.members.size })
+            .inlineKeyboard(
+                row("Новая группа", BTN_ENTER_NEW_GROUP_NAME),
+                *groups.map {
+                    btn(it.name, BTN_VIEW_ONE_GROUP + it.id)
+                }.chunked(3).toTypedArray()
+            )
+            .editIfCallbackMessageOrSend()
     }
 
-    @OnMessage(state = WAITING_FOR_GROUP_NAME)
-    fun onGroupName(update: Update, ctx: UserContext) {
-        val groupName = update.message.text
-        groupService.createGroup(update.message.from.id, groupName)
-
-        ctx.state = WAITING_FOR_GROUP_NAME
+    @OnCallback(prefix = BTN_ENTER_NEW_GROUP_NAME)
+    fun enterNewGroupName(update: Update, ctx: UserContext, prefix: String? = null) {
+        ctx.state = STT_WAITING_NEW_GROUP_NAME
         bot.reply(update)
-            .text("Группа $groupName создана!")
-            .inlineKeyboard(
-                row(btnSwitch("Пригласить участника", groupName)),
+            .text((prefix ?: "") + "Введите название группы:")
+            .deleteAfterUpdateMessage(ctx)
+            .editIfCallbackMessageOrSend()
+    }
+
+    @OnMessage(state = STT_WAITING_NEW_GROUP_NAME)
+    fun onNewGroupName(update: Update, ctx: UserContext) {
+        val groupName = update.message.text
+        val user = userService.findByTelegramId(getFrom(update).id)
+            ?: throw UserNotFoundException(getFrom(update).id)
+
+        val group: Group = groupService.create(
+            groupName = groupName,
+            members = listOf(user.id!!),
+        )
+        ctx.state = ""
+
+        viewOneGroup(update, ctx, group)
+    }
+
+    @OnCallback(prefix = BTN_VIEW_ONE_GROUP)
+    fun viewGroup(update: Update, ctx: UserContext) {
+        val groupId = update.callbackQuery.data.removePrefix(BTN_VIEW_ONE_GROUP).toLong()
+        val group = groupService.getById(groupId)
+
+        viewOneGroup(update, ctx, group)
+    }
+
+    private fun viewOneGroup(update: Update, ctx: UserContext, group: Group) {
+        bot.reply(update)
+            .text(
+                """
+                | Группа ${group.name}
+                ${if (ctx.defaultGroup == group.id) "| Установлена как основная" else ""}
+                | Участники: 
+                | ${group.members.joinToString("\n") { userService.getById(it).getViewName() }}
+                """.trimMargin()
             )
-            .send()
+            .inlineKeyboard(
+                row("Сделать основной", BTN_SET_MAIN_GROUP + group.id)
+                    .filter { ctx.defaultGroup != group.id },
+                row(btnSwitch("Пригласить участника", group.name)),
+                row("Назад", BTN_VIEW_ALL_GROUPS)
+            )
+            .editIfCallbackMessageOrSend()
+    }
+
+    @OnCallback(prefix = BTN_SET_MAIN_GROUP)
+    fun setMainGroup(update: Update, ctx: UserContext) {
+        val groupId = update.callbackQuery.data.removePrefix(BTN_SET_MAIN_GROUP).toLong()
+        val group = groupService.getById(groupId)
+
+        ctx.defaultGroup = group.id
+
+        bot.reply(update)
+            .text("Группа ${group.name} теперь ваша основная")
+            .sendPopup()
+
+        viewOneGroup(update, ctx, group)
     }
 
     @OnInlineQuery
     fun onInlineQuery(update: Update, ctx: UserContext) {
-        val inlineQuery = update.inlineQuery
-        val query = inlineQuery.query.trim()
+        val query = update.inlineQuery.query.trim()
+        val user = userService.findByTelegramId(getFrom(update).id)
+            ?: throw UserNotFoundException(getFrom(update).id)
 
-        val groups = groupService.findAllByUserId(update.inlineQuery.from.id)
+        val groups = groupService.findAllByUserId(user.id!!)
         val results = groups
             .filter { it.name.contains(query, ignoreCase = true) }
             .map {
@@ -76,31 +139,32 @@ class GroupHandler(
                         id = it.id.toString()
                         title = it.name
                         inputMessageContent = InputTextMessageContent().apply { messageText = it.name }
-                        replyMarkup = InlineKeyboardMarkup(listOf(row("Участвовать", "$JOIN_GROUP${it.id}")))
+                        replyMarkup = InlineKeyboardMarkup(
+                            listOf(
+                                row("Участвовать", BTN_JOIN_GROUP + it.id)
+                            )
+                        )
+
                     }
             }
 
-        bot.sendAnswerInlineQuery(inlineQuery.id, results)
+        bot.sendAnswerInlineQuery(update.inlineQuery.id, results)
     }
 
-    @OnCallback(prefix = JOIN_GROUP)
-    fun onJoinGroup(update: Update, ctx: UserContext) {
-        val groupId = update.callbackQuery.data.removePrefix(JOIN_GROUP).toLong()
-        val group = groupService.findById(groupId)
+    @OnCallback(prefix = BTN_JOIN_GROUP)
+    fun joinGroup(update: Update, ctx: UserContext) {
+        val groupId = update.callbackQuery.data.removePrefix(BTN_JOIN_GROUP).toLong()
+        val group = groupService.getById(groupId)
 
-        if (group == null) {
-            bot.reply(update)
-                .text("Группа не найдена")
-                .sendPopup()
-            return
-        }
+        val user = userService.findByTelegramId(getFrom(update).id)
+            ?: throw UserNotFoundException(getFrom(update).id)
 
-        groupService.addMember(groupId, update.callbackQuery.from.id)
+        groupService.addMember(groupId, user.id!!)
 
         bot.reply(update)
             .text("Вы присоединились к группе ${group.name}")
             .sendPopup()
+
+        viewOneGroup(update, ctx, group)
     }
-
-
 }

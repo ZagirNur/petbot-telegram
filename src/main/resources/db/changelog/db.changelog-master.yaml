@@ -1,0 +1,102 @@
+databaseChangeLog:
+  - changeSet:
+      id: "create-bot-group"
+      author: "generated"
+      changes:
+        - createTable:
+            tableName: "bot_group"
+            columns:
+              - column:
+                  name: "id"
+                  type: "BIGINT"
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: "name"
+                  type: "VARCHAR(255)"
+                  constraints:
+                    nullable: false
+              - column:
+                  name: "members"
+                  type: "JSONB"
+                  constraints:
+                    nullable: false
+
+  - changeSet:
+      id: "create-bot-user"
+      author: "generated"
+      changes:
+        - createTable:
+            tableName: "bot_user"
+            columns:
+              - column:
+                  name: "id"
+                  type: "BIGINT"
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: "telegram_id"
+                  type: "BIGINT"
+                  constraints:
+                    nullable: false
+              - column:
+                  name: "telegram_user_name"
+                  type: "VARCHAR(255)"
+              - column:
+                  name: "first_name"
+                  type: "VARCHAR(255)"
+              - column:
+                  name: "last_name"
+                  type: "VARCHAR(255)"
+              - column:
+                  name: "language_code"
+                  type: "VARCHAR(50)"
+                  constraints:
+                    nullable: false
+              - column:
+                  name: "context"
+                  type: "JSONB"
+                  constraints:
+                    nullable: false
+
+  - changeSet:
+      id: "create-expense"
+      author: "generated"
+      changes:
+        - createTable:
+            tableName: "expense"
+            columns:
+              - column:
+                  name: "id"
+                  type: "BIGINT"
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: "group_id"
+                  type: "BIGINT"
+                  constraints:
+                    nullable: false
+              - column:
+                  name: "amount"
+                  type: "DECIMAL(19, 2)"
+                  constraints:
+                    nullable: false
+              - column:
+                  name: "description"
+                  type: "VARCHAR(255)"
+              - column:
+                  name: "paid_by"
+                  type: "JSONB"
+                  constraints:
+                    nullable: false
+              - column:
+                  name: "split_by"
+                  type: "JSONB"
+                  constraints:
+                    nullable: false

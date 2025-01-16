@@ -1,13 +1,14 @@
 package dev.zagirnur.petbot.sleeping.petbot.config
 
 import dev.zagirnur.petbot.sdk.HandlerRegistry
-import dev.zagirnur.petbot.sleeping.petbot.handler.ExpenseHandler
-import dev.zagirnur.petbot.sleeping.petbot.handler.GroupHandler
-//import dev.zagirnur.petbot.sleeping.petbot.handler.TestHandler
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.cache.annotation.EnableCaching
 import org.springframework.context.annotation.Configuration
+import org.springframework.retry.annotation.EnableRetry
 
+@EnableRetry
 @Configuration
+@EnableCaching
 class BotConfig {
 
     @Autowired
@@ -15,8 +16,8 @@ class BotConfig {
         registry.setHandlersOrder(
             listOf(
 //                TestHandler::class.java
-                GroupHandler::class.java,
-                ExpenseHandler::class.java
+//                GroupHandler::class.java,
+//                ExpenseHandler::class.java
             ), true
         )
     }
