@@ -13,7 +13,9 @@ interface GroupRepository : CrudRepository<GroupEntity, Long> {
 }
 
 
-interface ExpenseRepository : CrudRepository<ExpenseEntity, Long>
+interface ExpenseRepository : CrudRepository<ExpenseEntity, Long> {
+    fun findAllByGroupId(groupId: Long): List<ExpenseEntity>
+}
 
 interface UserRepository : CrudRepository<BotUserEntity, Long> {
     fun findByTelegramId(telegramId: Long): BotUserEntity?

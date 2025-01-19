@@ -64,7 +64,7 @@ databaseChangeLog:
                     nullable: false
 
   - changeSet:
-      id: "create-expense"
+      id: "create-expense-1"
       author: "generated"
       changes:
         - createTable:
@@ -90,6 +90,11 @@ databaseChangeLog:
               - column:
                   name: "description"
                   type: "VARCHAR(255)"
+              - column:
+                  name: "split_type"
+                  type: "VARCHAR(255)"
+                  constraints:
+                    nullable: false
               - column:
                   name: "paid_by"
                   type: "JSONB"

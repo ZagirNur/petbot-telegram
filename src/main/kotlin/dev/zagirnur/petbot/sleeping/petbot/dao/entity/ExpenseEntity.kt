@@ -1,5 +1,6 @@
 package dev.zagirnur.petbot.sleeping.petbot.dao.entity
 
+import dev.zagirnur.petbot.sleeping.petbot.model.SplitType
 import io.hypersistence.utils.hibernate.type.json.JsonBinaryType
 import jakarta.persistence.*
 import org.hibernate.annotations.Type
@@ -16,6 +17,8 @@ data class ExpenseEntity (
     var groupId: Long,
     var amount: BigDecimal,
     var description: String,
+    @Enumerated(EnumType.STRING)
+    var splitType: SplitType = SplitType.EQUALLY,
     @Type(JsonBinaryType::class)
     val paidBy: MutableMap<Long, BigDecimal> = mutableMapOf(),
     @Type(JsonBinaryType::class)

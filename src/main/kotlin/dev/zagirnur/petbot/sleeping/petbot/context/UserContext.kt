@@ -6,7 +6,7 @@ import dev.zagirnur.petbot.sleeping.petbot.model.Expense
 
 
 data class UserContext(
-    val editingExpenses: MutableList<Expense> = mutableListOf(),
+    val editingExpenses: MutableMap<Long, Expense> = mutableMapOf(),
     var defaultGroup: Long? = null,
     var tagToMessageId: MutableMap<String, Long> = mutableMapOf(),
     var userChatState: String = "",
