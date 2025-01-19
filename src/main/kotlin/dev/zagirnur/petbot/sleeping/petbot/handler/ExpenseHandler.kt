@@ -4,21 +4,38 @@ import dev.zagirnur.petbot.sdk.BotSender
 import dev.zagirnur.petbot.sdk.BotUtils.getFrom
 import dev.zagirnur.petbot.sdk.ReplyBuilder.btn
 import dev.zagirnur.petbot.sdk.ReplyBuilder.row
+import dev.zagirnur.petbot.sdk.StringUpdateData
 import dev.zagirnur.petbot.sdk.TableBuilder
 import dev.zagirnur.petbot.sdk.annotations.OnCallback
 import dev.zagirnur.petbot.sdk.annotations.OnMessage
 import dev.zagirnur.petbot.sleeping.petbot.context.UserContext
 import dev.zagirnur.petbot.sleeping.petbot.dao.entity.BotUserEntity
 import dev.zagirnur.petbot.sleeping.petbot.exceptions.UserNotFoundException
+import dev.zagirnur.petbot.sleeping.petbot.handler.ExpenseHandler.Companion.BTN_EDIT_PAID_BY
+import dev.zagirnur.petbot.sleeping.petbot.handler.ExpenseHandler.Companion.BTN_EDIT_SPLIT_BY
+import dev.zagirnur.petbot.sleeping.petbot.handler.ExpenseHandler.Companion.BTN_GROUP_EXPENSES
+import dev.zagirnur.petbot.sleeping.petbot.handler.ExpenseHandler.Companion.BTN_SET_SPLIT_EQUALLY
+import dev.zagirnur.petbot.sleeping.petbot.handler.ExpenseHandler.Companion.BTN_SPLIT_BY_ADD_EQUALLY
+import dev.zagirnur.petbot.sleeping.petbot.handler.ExpenseHandler.Companion.BTN_SPLIT_BY_DELETE_EQUALLY
+import dev.zagirnur.petbot.sleeping.petbot.handler.ExpenseHandler.Companion.BTN_TMP_CANCEL_EDIT_PAID_BY
+import dev.zagirnur.petbot.sleeping.petbot.handler.ExpenseHandler.Companion.BTN_TMP_CANCEL_EDIT_SPLIT_BY
+import dev.zagirnur.petbot.sleeping.petbot.handler.ExpenseHandler.Companion.BTN_TMP_DELETE_FROM_PAID_BY
+import dev.zagirnur.petbot.sleeping.petbot.handler.ExpenseHandler.Companion.BTN_TMP_EDIT_PAID_AMOUNT
+import dev.zagirnur.petbot.sleeping.petbot.handler.ExpenseHandler.Companion.BTN_TMP_EDIT_PAID_AMOUNT_SET_FULL
+import dev.zagirnur.petbot.sleeping.petbot.handler.ExpenseHandler.Companion.BTN_TMP_SAVE_PAID_BY
+import dev.zagirnur.petbot.sleeping.petbot.handler.ExpenseHandler.Companion.BTN_TMP_SAVE_SPLIT_BY
+import dev.zagirnur.petbot.sleeping.petbot.handler.ExpenseHandler.Companion.BTN_TMP_SPLIT_BY_DELETE
+import dev.zagirnur.petbot.sleeping.petbot.handler.ExpenseHandler.Companion.BTN_TMP_SPLIT_BY_EDIT_AMOUNT
+import dev.zagirnur.petbot.sleeping.petbot.handler.ExpenseHandler.Companion.BTN_VIEW_ONE_EXPENSE
 import dev.zagirnur.petbot.sleeping.petbot.model.Expense
 import dev.zagirnur.petbot.sleeping.petbot.model.Group
 import dev.zagirnur.petbot.sleeping.petbot.model.SplitType
+import dev.zagirnur.petbot.sleeping.petbot.model.SplitType.EQUALLY
 import dev.zagirnur.petbot.sleeping.petbot.service.ExpenseService
 import dev.zagirnur.petbot.sleeping.petbot.service.GroupService
 import dev.zagirnur.petbot.sleeping.petbot.service.UserService
 import org.springframework.stereotype.Component
 import org.telegram.telegrambots.meta.api.objects.Update
-import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton
 import java.math.BigDecimal
 
 @Component
@@ -47,10 +64,10 @@ class ExpenseHandler(
         const val BTN_TMP_SAVE_PAID_BY = "TMP_SAVE_PAID_BY:"
         const val BTN_TMP_SAVE_SPLIT_BY = "TMP_SAVE_SPLIT_BY:"
 
-        const val BTN_DELETE_FROM_SPLIT_BY_EQUALLY = "DELETE_FROM_SPLIT_BY:"
-        const val BTN_TMP_DELETE_FROM_SPLIT_BY_NOT_EQUALLY = "DELETE_FROM_SPLIT_BY_NOT_EQUALLY:"
-        const val BTN_PUT_TO_SPLIT_BY_EQUALLY = "PUT_TO_SPLIT_BY:"
-        const val BTN_TMP_EDIT_SPLIT_AMOUNT = "TMP_EDIT_SPLIT_AMOUNT:"
+        const val BTN_SPLIT_BY_DELETE_EQUALLY = "DELETE_FROM_SPLIT_BY:"
+        const val BTN_TMP_SPLIT_BY_DELETE = "DELETE_FROM_SPLIT_BY_NOT_EQUALLY:"
+        const val BTN_SPLIT_BY_ADD_EQUALLY = "PUT_TO_SPLIT_BY:"
+        const val BTN_TMP_SPLIT_BY_EDIT_AMOUNT = "TMP_EDIT_SPLIT_AMOUNT:"
 
 
         // chat states
@@ -68,19 +85,19 @@ class ExpenseHandler(
 
     //language=RegExp
     @OnMessage(regexp = """^\w?\s?[\d., ]+\D{0,3}\s.*$""")
-    fun onExpense(update: Update, ctx: UserContext) {
+    fun onCreateNewExpense(update: Update, ctx: UserContext) {
         val amount = update.message.text.split(" ")[0].replace(",", ".").toBigDecimal()
         val description = update.message.text.split(" ").drop(1).joinToString(" ")
 
-        val user = userService.findByTelegramId(getFrom(update).id)
-            ?: throw UserNotFoundException(getFrom(update).id)
-
-        val defaultGroupId = ctx.defaultGroup ?: run {
-            groupHandler.onGroups(update, ctx)
-            return
-        }
-
-        val defaultGroup = groupService.getById(defaultGroupId)
+        val user = getUser(update)
+        val defaultGroup = ctx.defaultGroup
+            ?.let { defaultGroupId ->
+                groupService.getById(defaultGroupId)
+            }
+            ?: run {
+                groupHandler.onGroups(update, ctx)
+                return
+            }
 
         val newExpense = expenseService.createNew(
             groupId = defaultGroup.id,
@@ -90,77 +107,27 @@ class ExpenseHandler(
             splitBy = mapOf(user.id!! to amount),
         )
 
-        showExpenseView(update, ctx, newExpense, defaultGroup, "Добавлен новый расход\n\n")
-    }
-
-    fun showExpenseView(
-        update: Update,
-        ctx: UserContext,
-        newExpense: Expense,
-        group: Group,
-        prefix: String
-    ) {
-        val paidBy = newExpense.paidBy.entries.toList()
-        val splitBy = newExpense.splitBy.entries.toList()
-        val idToUser = group.members.associateWith { userService.getById(it) }
-        bot.reply(update)
-            .text(
-                """
-                $prefix
-                |ПРОСМОТР РАСХОДА
-                |Описание: ${newExpense.description}
-                |Сумма: ${newExpense.amount}
-                |Распределение: ${if (newExpense.splitType == SplitType.EQUALLY) "поровну" else "не поровну"}
-                |
-                |${
-                    TableBuilder(
-                        listOf("Заплатил", "Сумма"), '-', " | "
-                    ).column { idx ->
-                        paidBy[idx].let { idToUser[it.key]?.getViewName() }
-                    }.numberColumn {
-                        paidBy[it].value.toPlainString()
-                    }.build()
-                }
-                |
-                |${
-                    TableBuilder(
-                        listOf("Участник", "Сумма"), '-', " | "
-                    ).column { idx ->
-                        splitBy[idx].let { idToUser[it.key]?.getViewName() }
-                    }.numberColumn { idx ->
-                        splitBy[idx].value.toPlainString()
-                    }.build()
-                }
-                | 
-                """.trimMargin()
-            )
-            .inlineKeyboard(
-                row("✏️Плательщики", BTN_EDIT_PAID_BY + newExpense.id),
-                row("🤝Разделить поровну", BTN_SET_SPLIT_EQUALLY + newExpense.id),
-                *group.members.map { mId ->
-                    if (newExpense.splitBy.containsKey(mId)) {
-                        splitParticipantRow(newExpense, userService.getById(mId))
-                    } else {
-                        notSplitParticipantRow(newExpense, userService.getById(mId))
-                    }
-                }.toTypedArray(),
-                row("⬅️Расходы группы", BTN_GROUP_EXPENSES + newExpense.groupId),
-            )
-            .editIfCallbackMessageOrSend()
+        val model = toOneExpenseViewModel(newExpense, defaultGroup)
+        bot.viewOneExpense(update, model, "Добавлен новый расход")
     }
 
     @OnCallback(prefix = BTN_GROUP_EXPENSES)
-    fun onGroupExpenses(update: Update, ctx: UserContext) {
-        val groupId = update.callbackQuery.data.removePrefix(BTN_GROUP_EXPENSES).toLong()
-        val group = groupService.getById(groupId)
-
-        val expenses = expenseService.getGroupExpenses(groupId)
+    fun onGroupExpenses(update: Update, ctx: UserContext, btn: StringUpdateData) {
+        val group = groupService.getById(btn.data.toLong())
+        val expenses = expenseService.getGroupExpenses(group.id)
 
         bot.reply(update)
             .text(
                 """
-                |Расходы группы ${group.name}
-                |${expenses.joinToString("\n") { it.description }}
+                |
+                |Расходы группы ${group.name}:
+                |
+                |${
+                    TableBuilder('-', " | ")
+                        .column("Описание") { idx -> expenses[idx].description }
+                        .numberColumn("Сумма") { idx -> expenses[idx].amount.toPlainString() }
+                        .build()
+                }
                 """.trimMargin()
             )
             .inlineKeyboard(
@@ -172,203 +139,80 @@ class ExpenseHandler(
     }
 
     @OnCallback(prefix = BTN_VIEW_ONE_EXPENSE)
-    fun onViewOneExpense(update: Update, ctx: UserContext) {
-        val expenseId = update.callbackQuery.data.removePrefix(BTN_VIEW_ONE_EXPENSE).toLong()
-        val expense = expenseService.getById(expenseId)
-
+    fun onViewOneExpense(update: Update, ctx: UserContext, btn: StringUpdateData) {
+        val expense = expenseService.getById(btn.data.toLong())
         val group = groupService.getById(expense.groupId)
 
-        showExpenseView(update, ctx, expense, group, "")
+        val model = toOneExpenseViewModel(expense, group)
+        bot.viewOneExpense(update, model, "")
     }
 
     @OnCallback(prefix = BTN_EDIT_PAID_BY)
-    fun onEditPaidBy(update: Update, ctx: UserContext) {
-        val expenseId = update.callbackQuery.data.removePrefix(BTN_EDIT_PAID_BY).toLong()
-        editPaidByView(expenseId, ctx, update)
-    }
-
-    private fun editPaidByView(
-        expenseId: Long,
-        ctx: UserContext,
-        update: Update
-    ) {
+    fun onViewEditPaidBy(update: Update, ctx: UserContext, btn: StringUpdateData) {
+        val expenseId = btn.data.toLong()
         val editingExpense = ctx.editingExpenses.getOrPut(expenseId) { expenseService.getById(expenseId) }
         val group = groupService.getById(editingExpense.groupId)
-        val idToUser = group.members.associateWith { userService.getById(it) }
 
-        val disbalance = editingExpense.amount - editingExpense.paidBy.values.reduce(BigDecimal::add)
-        val paidBayList = editingExpense.paidBy.entries.toList()
-
-        bot.reply(update)
-            .text(
-                """
-                |ПЛАТЕЛЬЩИКИ
-                |Расход ${editingExpense.description}
-                |Сумма: ${editingExpense.amount}
-                |
-                |${
-                    TableBuilder('-', " | ")
-                        .column("Плательщик") { idx ->
-                            val userId = paidBayList[idx].key
-                            idToUser[userId]?.getViewName()
-                        }
-                        .numberColumn("Сумма") { idx ->
-                            paidBayList[idx].value.toPlainString()
-                        }.build()
-                }
-                |
-                |${
-                    if (disbalance > BigDecimal.ZERO) {
-                        "🔴Недоплата: $disbalance"
-                    } else if (disbalance < BigDecimal.ZERO) {
-                        "🔴Переплата: ${disbalance.negate()}"
-                    } else ""
-                }
-                """.trimMargin()
-            )
-            .inlineKeyboard(
-                *group.members.map { mId ->
-                    if (editingExpense.paidBy.containsKey(mId)) {
-                        participantRow(editingExpense, userService.getById(mId))
-                    } else {
-                        notParticipantRow(editingExpense, userService.getById(mId))
-                    }
-                }.toTypedArray(),
-                row("✅Сохранить", BTN_TMP_SAVE_PAID_BY + editingExpense.id),
-                row("⬅️Отменить изменения", BTN_TMP_CANCEL_EDIT_PAID_BY + editingExpense.id),
-            )
-            .editIfCallbackMessageOrSend()
+        val viewModel = toEditPaidByViewModel(editingExpense, group)
+        bot.viewEditPaidBy(update, viewModel)
     }
 
     @OnCallback(prefix = BTN_TMP_SAVE_PAID_BY)
-    fun onTmpSavePaidBy(update: Update, ctx: UserContext) {
-        val expenseId = update.callbackQuery.data.removePrefix(BTN_TMP_SAVE_PAID_BY).toLong()
+    fun onSavePaidBy(update: Update, ctx: UserContext, btn: StringUpdateData) {
+        val expenseId = btn.data.toLong()
         val newPaidBy = ctx.editingExpenses[expenseId]!!.paidBy
         val expense = expenseService.getById(expenseId)
+        val group = groupService.getById(expense.groupId)
 
         val newDisbalance = expense.amount - newPaidBy.values.reduce(BigDecimal::add)
         if (BigDecimal.ZERO.compareTo(newDisbalance) != 0) {
-            editPaidByView(expenseId, ctx, update)
+            val model = toEditPaidByViewModel(expense, group)
+            bot.viewEditPaidBy(update, model)
             throw IllegalArgumentException("Недоплата/переплата не равна нулю: $newDisbalance")
         }
 
         expenseService.save(expense.copy(paidBy = newPaidBy))
 
-        val group = groupService.getById(expense.groupId)
-        showExpenseView(update, ctx, expense, group, "Изменения сохранены\n\n")
+        val model = toOneExpenseViewModel(expense, group)
+        bot.viewOneExpense(update, model, "Изменения сохранены")
     }
 
     @OnCallback(prefix = BTN_TMP_CANCEL_EDIT_PAID_BY)
-    fun onTmpCancelEditPaidBy(update: Update, ctx: UserContext) {
-        val expenseId = update.callbackQuery.data.removePrefix(BTN_TMP_CANCEL_EDIT_PAID_BY).toLong()
+    fun onTmpCancelEditPaidBy(update: Update, ctx: UserContext, btn: StringUpdateData) {
+        val expenseId = btn.data.toLong()
         ctx.editingExpenses.remove(expenseId)
         val expense = expenseService.getById(expenseId)
         val group = groupService.getById(expense.groupId)
-        showExpenseView(update, ctx, expense, group, "")
-    }
 
-
-    fun participantRow(
-        expense: Expense,
-        user: BotUserEntity,
-    ): List<InlineKeyboardButton> {
-        val amount = expense.paidBy[user.id!!]!!
-        return row(
-            btn("✅${user.getViewName()}", BTN_TMP_DELETE_FROM_PAID_BY + expense.id + ":" + user.id),
-            btn(amount.toPlainString(), BTN_TMP_EDIT_PAID_AMOUNT + expense.id + ":" + user.id)
-        )
-    }
-
-    fun notParticipantRow(
-        editingExpense: Expense,
-        user: BotUserEntity,
-    ): List<InlineKeyboardButton> {
-        return row(
-            btn(user.getViewName(), "$BTN_TMP_EDIT_PAID_AMOUNT${editingExpense.id}:${user.id}"),
-            btn("-", "$BTN_TMP_EDIT_PAID_AMOUNT${editingExpense.id}:${user.id}")
-        )
-    }
-
-    fun splitParticipantRow(
-        expense: Expense,
-        user: BotUserEntity,
-    ): List<InlineKeyboardButton> {
-        val amount = expense.splitBy[user.id!!]!!
-        val nameBtn = if (expense.splitType == SplitType.EQUALLY) {
-            btn("✅${user.getViewName()}", BTN_DELETE_FROM_SPLIT_BY_EQUALLY + expense.id + ":" + user.id)
-        } else {
-            btn("✅${user.getViewName()}", BTN_TMP_DELETE_FROM_SPLIT_BY_NOT_EQUALLY + expense.id + ":" + user.id)
-        }
-        return row(
-            nameBtn,
-            btn(amount.toPlainString(), BTN_TMP_EDIT_SPLIT_AMOUNT + expense.id + ":" + user.id)
-        )
-    }
-
-    fun notSplitParticipantRow(
-        editingExpense: Expense,
-        user: BotUserEntity,
-    ): List<InlineKeyboardButton> {
-        val amount = editingExpense.splitBy[user.id!!] ?: BigDecimal.ZERO
-        val nameBtn = if (editingExpense.splitType == SplitType.EQUALLY) {
-            btn(user.getViewName(), BTN_PUT_TO_SPLIT_BY_EQUALLY + editingExpense.id + ":" + user.id)
-        } else {
-            btn(user.getViewName(), BTN_TMP_EDIT_SPLIT_AMOUNT + editingExpense.id + ":" + user.id)
-        }
-        return row(
-            nameBtn,
-            btn(amount.toPlainString(), BTN_TMP_EDIT_SPLIT_AMOUNT + editingExpense.id + ":" + user.id)
-        )
+        val model = toOneExpenseViewModel(expense, group)
+        bot.viewOneExpense(update, model, "")
     }
 
     @OnCallback(prefix = BTN_TMP_DELETE_FROM_PAID_BY)
-    fun onTmpDeleteFromPaidBy(update: Update, ctx: UserContext) {
-        val (expenseId, userId) = update.callbackQuery.data.removePrefix(BTN_TMP_DELETE_FROM_PAID_BY)
-            .split(":").map { it.toLong() }
-        val expense = ctx.editingExpenses.getOrPut(expenseId) { expenseService.getById(expenseId) }
-        val user = userService.getById(userId)
+    fun onTmpDeleteFromPaidBy(update: Update, ctx: UserContext, btn: StringUpdateData) {
+        val (expenseId, userId) = btn.data.split(":").map { it.toLong() }
+        val editingExpense = ctx.editingExpenses.getOrPut(expenseId) { expenseService.getById(expenseId) }
+        val group = groupService.getById(editingExpense.groupId)
 
-        expense.paidBy.remove(user.id)
+        editingExpense.paidBy.remove(userId)
 
-        editPaidByView(expenseId, ctx, update)
+        val model = toEditPaidByViewModel(editingExpense, group)
+        bot.viewEditPaidBy(update, model)
     }
 
     @OnCallback(prefix = BTN_TMP_EDIT_PAID_AMOUNT)
-    fun onTmpEditPaidAmount(update: Update, ctx: UserContext) {
-        val (expenseId, userId) = update.callbackQuery.data.removePrefix(BTN_TMP_EDIT_PAID_AMOUNT)
-            .split(":").map { it.toLong() }
-        tmpEditPaidAmountView(update, ctx, expenseId, userId, "")
-    }
-
-    private fun tmpEditPaidAmountView(
-        update: Update,
-        ctx: UserContext,
-        expenseId: Long,
-        userId: Long,
-        prefix: String,
-    ) {
-
+    fun onTmpEditPaidAmount(update: Update, ctx: UserContext, btn: StringUpdateData) {
+        val (expenseId, userId) = btn.data.split(":").map { it.toLong() }
         val expense = ctx.editingExpenses.getOrPut(expenseId) { expenseService.getById(expenseId) }
         val user = userService.getById(userId)
 
         val disbalance = expense.amount - expense.paidBy.values.reduce(BigDecimal::add)
 
         ctx.state = "$STT_EDIT_PAID_AMOUNT$expenseId:$userId"
-        bot.reply(update)
-            .text(
-                prefix + """
-                    |Расход ${expense.description}
-                    |Сумма: ${expense.amount}
-                    |Платит: ${user.getViewName()}
-                    |${if (disbalance > BigDecimal.ZERO) "🔴Текущая недоплата: $disbalance" else "🔴Текущая переплата: ${disbalance.negate()}"}
-                    |
-                    |Введите новую сумму:
-                    """.trimMargin()
-            ).inlineKeyboard(
-                row("Ввести всю сумму", BTN_TMP_EDIT_PAID_AMOUNT_SET_FULL + expense.id + ":" + user.id)
-                    .filter { disbalance > BigDecimal.ZERO },
-                row("⬅️Отменить", BTN_EDIT_PAID_BY + expense.id),
-            ).editIfCallbackMessageOrSend()
+
+        val paidBySorted = expense.paidBy.entries.sortedBy { it.key }
+            .map { userService.getById(it.key) to it.value }
+        bot.viewInputPaidAmount(update, expense, user, disbalance, paidBySorted)
     }
 
     @OnMessage(state = STT_EDIT_PAID_AMOUNT)
@@ -380,21 +224,25 @@ class ExpenseHandler(
 
         val newAmount = update.message.text.toBigDecimalOrNull()
             ?: run {
-                tmpEditPaidAmountView(update, ctx, expenseId, userId, "Некорректная сумма\n")
+                val disbalance = expense.amount - expense.paidBy.values.reduce(BigDecimal::add)
+                val paidBySorted = expense.paidBy.entries.sortedBy { it.key }
+                    .map { userService.getById(it.key) to it.value }
+                bot.viewInputPaidAmount(update, expense, user, disbalance, paidBySorted, "Некорректная сумма")
                 return
             }
 
         ctx.editingExpenses.getOrPut(expenseId) { expense }
             .paidBy[user.id!!] = newAmount
-
         ctx.cleanState()
-        editPaidByView(expenseId, ctx, update)
+
+        val group = groupService.getById(expense.groupId)
+        val model = toEditPaidByViewModel(expense, group)
+        bot.viewEditPaidBy(update, model)
     }
 
     @OnCallback(prefix = BTN_TMP_EDIT_PAID_AMOUNT_SET_FULL)
-    fun onTmpEditPaidAmountSetFull(update: Update, ctx: UserContext) {
-        val (expenseId, userId) = update.callbackQuery.data.removePrefix(BTN_TMP_EDIT_PAID_AMOUNT_SET_FULL)
-            .split(":").map { it.toLong() }
+    fun onTmpEditPaidAmountSetFull(update: Update, ctx: UserContext, btn: StringUpdateData) {
+        val (expenseId, userId) = btn.data.split(":").map { it.toLong() }
         val expense = ctx.editingExpenses.getOrPut(expenseId) { expenseService.getById(expenseId) }
         val user = userService.getById(userId)
 
@@ -406,20 +254,18 @@ class ExpenseHandler(
         }
         ctx.cleanState()
 
-        editPaidByView(expenseId, ctx, update)
+        val group = groupService.getById(expense.groupId)
+        val model = toEditPaidByViewModel(expense, group)
+        bot.viewEditPaidBy(update, model)
     }
 
     @OnCallback(prefix = BTN_SET_SPLIT_EQUALLY)
-    fun onSetSplitEqually(update: Update, ctx: UserContext) {
-        val expenseId = update.callbackQuery.data.removePrefix(BTN_SET_SPLIT_EQUALLY).toLong()
+    fun onSetSplitEqually(update: Update, ctx: UserContext, btn: StringUpdateData) {
+        val expenseId = btn.data.toLong()
         val expense = ctx.editingExpenses.getOrPut(expenseId) { expenseService.getById(expenseId) }
 
-        val group = groupService.getById(expense.groupId)
-        val members = group.members
-
-        val splitByList = expense.splitBy.entries.toList()
-
-        val idToUser = members.associateWith { userService.getById(it) }
+        val sortedSplitBy = expense.splitBy.entries.sortedBy { it.key }
+            .map { userService.getById(it.key) to it.value }
 
         bot.reply(update)
             .text(
@@ -429,16 +275,13 @@ class ExpenseHandler(
                 |
                 |${
                     TableBuilder('-', " | ")
-                        .column("Участник") { idx ->
-                            val userId = splitByList[idx].key
-                            idToUser[userId]?.getViewName()
-                        }
-                        .numberColumn("Сумма") { idx ->
-                            splitByList[idx].value.toPlainString()
-                        }.build()
+                        .column("Участник") { idx -> sortedSplitBy[idx].first.getViewName() }
+                        .numberColumn("Сумма") { idx -> sortedSplitBy[idx].second.toPlainString() }
+                        .build()
                 }
                 |
-                |Вы уверены, что хотите разделить расход поровну? Текущее распределение будет удалено.
+                |Вы уверены, что хотите разделить расход поровну?
+                |Текущее распределение будет удалено.
                 """.trimMargin(),
             )
             .inlineKeyboard(
@@ -449,8 +292,8 @@ class ExpenseHandler(
     }
 
     @OnCallback(prefix = BTN_SET_SPLIT_EQUALLY_APPROVE)
-    fun onSetSplitEquallyApprove(update: Update, ctx: UserContext) {
-        val expenseId = update.callbackQuery.data.removePrefix(BTN_SET_SPLIT_EQUALLY_APPROVE).toLong()
+    fun onSetSplitEquallyApprove(update: Update, ctx: UserContext, btn: StringUpdateData) {
+        val expenseId = btn.data.toLong()
         setSplitEquallyApprove(expenseId, ctx, update)
     }
 
@@ -460,147 +303,37 @@ class ExpenseHandler(
         update: Update
     ) {
         var expense = expenseService.getById(expenseId)
+        val group = groupService.getById(expense.groupId)
 
-        val splitByUsers = expense.splitBy.keys
-        val amount = expense.amount / splitByUsers.size.toBigDecimal()
+        val amount = expense.amount / expense.splitBy.size.toBigDecimal()
+        val newSplitBy = expense.splitBy.keys.associateWith { amount }
 
-        val newSplitBy = splitByUsers.associateWith { amount }
-
-        expense = expenseService.save(expense.copy(splitBy = newSplitBy.toMutableMap(), splitType = SplitType.EQUALLY))
+        expense = expenseService.save(
+            expense.copy(
+                splitBy = newSplitBy.toMutableMap(),
+                splitType = EQUALLY
+            )
+        )
 
         ctx.cleanState()
 
-        val group = groupService.getById(expense.groupId)
-        showExpenseView(update, ctx, expense, group, "Распределение изменено\n\n")
+        val model = toOneExpenseViewModel(expense, group)
+        bot.viewOneExpense(update, model)
     }
 
-    @OnCallback(prefix = BTN_EDIT_SPLIT_BY)
-    fun onEditSplitBy(update: Update, ctx: UserContext) {
-        val expenseId = update.callbackQuery.data.removePrefix(BTN_EDIT_SPLIT_BY).toLong()
-        editSplitByView(expenseId, ctx, update)
-    }
-
-    fun editSplitByView(
-        expenseId: Long,
-        ctx: UserContext,
-        update: Update
-    ) {
-        val editingExpense = ctx.editingExpenses.getOrPut(expenseId) { expenseService.getById(expenseId) }
-        val group = groupService.getById(editingExpense.groupId)
-        val idToUser = group.members.associateWith { userService.getById(it) }
-
-        val disbalance = editingExpense.amount - editingExpense.splitBy.values.reduce(BigDecimal::add)
-        val splitByList = editingExpense.splitBy.entries.toList()
-
-        bot.reply(update)
-            .text(
-                """
-                    |Расход ${editingExpense.description}
-                    |Сумма: ${editingExpense.amount}
-                    |
-                    |${
-                    TableBuilder('-', " | ")
-                        .column("Участник") { idx ->
-                            val userId = splitByList[idx].key
-                            idToUser[userId]?.getViewName()
-                        }
-                        .numberColumn("Сумма") { idx ->
-                            splitByList[idx].value.toPlainString()
-                        }.build()
-                }
-                    |
-                    |${
-                    if (disbalance > BigDecimal.ZERO) {
-                        "🔴Не хватает: $disbalance"
-                    } else if (disbalance < BigDecimal.ZERO) {
-                        "🔴Избыток: ${disbalance.negate()}"
-                    } else ""
-                }
-                    """.trimMargin()
-            )
-            .inlineKeyboard(
-                *group.members.map { mId ->
-                    if (editingExpense.splitBy.containsKey(mId)) {
-                        splitParticipantRow(editingExpense, userService.getById(mId))
-                    } else {
-                        notSplitParticipantRow(editingExpense, userService.getById(mId))
-                    }
-                }.toTypedArray(),
-                row("✅Сохранить", BTN_TMP_SAVE_SPLIT_BY + editingExpense.id),
-                row("⬅️Отменить изменения", BTN_TMP_CANCEL_EDIT_SPLIT_BY + editingExpense.id),
-            )
-            .editIfCallbackMessageOrSend()
-    }
-
-    @OnCallback(prefix = BTN_TMP_SAVE_SPLIT_BY)
-    fun onTmpSaveSplitBy(update: Update, ctx: UserContext) {
-        val expenseId = update.callbackQuery.data.removePrefix(BTN_TMP_SAVE_SPLIT_BY).toLong()
-        val newSplitBy = ctx.editingExpenses[expenseId]!!.splitBy
-        var expense = expenseService.getById(expenseId)
-
-        val newDisbalance = expense.amount - newSplitBy.values.reduce(BigDecimal::add)
-        if (BigDecimal.ZERO.compareTo(newDisbalance) != 0) {
-            editSplitByView(expenseId, ctx, update)
-            throw IllegalArgumentException("Недоплата/переплата не равна нулю: $newDisbalance")
-        }
-
-        expense = expenseService.save(expense.copy(splitBy = newSplitBy, splitType = SplitType.NOT_EQUALLY))
-        ctx.editingExpenses.remove(expenseId)
-
-        val group = groupService.getById(expense.groupId)
-        showExpenseView(update, ctx, expense, group, "Изменения сохранены\n\n")
-    }
-
-    @OnCallback(prefix = BTN_TMP_CANCEL_EDIT_SPLIT_BY)
-    fun onTmpCancelEditSplitBy(update: Update, ctx: UserContext) {
-        val expenseId = update.callbackQuery.data.removePrefix(BTN_TMP_CANCEL_EDIT_SPLIT_BY).toLong()
-        ctx.editingExpenses.remove(expenseId)
-        val expense = expenseService.getById(expenseId)
-        val group = groupService.getById(expense.groupId)
-        showExpenseView(update, ctx, expense, group, "")
-    }
-
-    @OnCallback(prefix = BTN_TMP_EDIT_SPLIT_AMOUNT)
-    fun onTmpEditSplitAmount(update: Update, ctx: UserContext) {
-        val (expenseId, userId) = update.callbackQuery.data.removePrefix(BTN_TMP_EDIT_SPLIT_AMOUNT)
-            .split(":").map { it.toLong() }
-        tmpEditSplitAmountView(update, ctx, expenseId, userId, "")
-    }
-
-    private fun tmpEditSplitAmountView(
-        update: Update,
-        ctx: UserContext,
-        expenseId: Long,
-        userId: Long,
-        prefix: String,
-    ) {
-        val expense = expenseService.getById(expenseId)
+    @OnCallback(prefix = BTN_TMP_SPLIT_BY_EDIT_AMOUNT)
+    fun onTmpEditSplitAmount(update: Update, ctx: UserContext, btn: StringUpdateData) {
+        val (expenseId, userId) = btn.data.split(":").map { it.toLong() }
+        val expense = ctx.editingExpenses.getOrElse(expenseId) { expenseService.getById(expenseId) }
         val user = userService.getById(userId)
-
         val disbalance = expense.amount - expense.splitBy.values.reduce(BigDecimal::add)
+        val splitBySorted = expense.splitBy.entries.sortedBy { it.key }
+            .map { userService.getById(it.key) to it.value }
+        val fromOneExpenseView = !ctx.editingExpenses.containsKey(expenseId)
 
         ctx.state = "$STT_EDIT_SPLIT_AMOUNT$expenseId:$userId"
-        bot.reply(update)
-            .text(
-                prefix + """
-                |Расход: ${expense.description}
-                |Сумма: ${expense.amount}
-                |Участник: ${user.getViewName()}
-                |${if (expense.splitBy.containsKey(user.id)) "Текущая сумма: ${expense.splitBy[user.id]}" else ""}
-                |${
-                    if (disbalance > BigDecimal.ZERO) "🔴Не достаточно распределено: $disbalance"
-                    else if (disbalance < BigDecimal.ZERO) "🔴Избыток: ${disbalance.negate()}"
-                    else ""
-                }
-                |
-                |Введите новую сумму:
-                """.trimMargin()
-            ).inlineKeyboard(
-                row("⬅️Отменить", BTN_EDIT_SPLIT_BY + expense.id)
-                    .filter { ctx.editingExpenses.containsKey(expenseId) },
-                row("⬅️Отменить", BTN_VIEW_ONE_EXPENSE + expense.id)
-                    .filter { !ctx.editingExpenses.containsKey(expenseId) },
-            ).editIfCallbackMessageOrSend()
+
+        bot.viewInputSplitAmount(update, expense, user, disbalance, splitBySorted, fromOneExpenseView)
     }
 
     @OnMessage(state = STT_EDIT_SPLIT_AMOUNT)
@@ -612,7 +345,10 @@ class ExpenseHandler(
 
         val newAmount = update.message.text.toBigDecimalOrNull()
             ?: run {
-                tmpEditSplitAmountView(update, ctx, expenseId, userId, "Некорректная сумма\n")
+                val disbalance = expense.amount - expense.splitBy.values.reduce(BigDecimal::add)
+                val splitBySorted = expense.splitBy.entries.sortedBy { it.key }
+                    .map { userService.getById(it.key) to it.value }
+                bot.viewInputSplitAmount(update, expense, user, disbalance, splitBySorted, false, "Некорректная сумма")
                 return
             }
 
@@ -620,33 +356,80 @@ class ExpenseHandler(
         expense.splitType = SplitType.NOT_EQUALLY
         ctx.cleanState()
 
-        editSplitByView(expenseId, ctx, update)
+        val group = groupService.getById(expense.groupId)
+        val model = toEditSplitUnequallyViewModel(expense, group)
+        bot.viewEditSplitUnequally(update, model)
     }
 
-    @OnCallback(prefix = BTN_PUT_TO_SPLIT_BY_EQUALLY)
+    @OnCallback(prefix = BTN_EDIT_SPLIT_BY)
+    fun onEditSplitBy(update: Update, ctx: UserContext, btn: StringUpdateData) {
+        val expenseId = btn.data.toLong()
+        val editingExpense = ctx.editingExpenses.getOrPut(expenseId) { expenseService.getById(expenseId) }
+        val group = groupService.getById(expenseId)
+        val model = toEditSplitUnequallyViewModel(editingExpense, group)
+        bot.viewEditSplitUnequally(update, model)
+    }
+
+    @OnCallback(prefix = BTN_TMP_SAVE_SPLIT_BY)
+    fun onTmpSaveSplitBy(update: Update, ctx: UserContext, btn: StringUpdateData) {
+        val expenseId = btn.data.toLong()
+        val editingExpense = ctx.editingExpenses[expenseId]!!
+        var expense = expenseService.getById(expenseId)
+        val newSplitBy = editingExpense.splitBy
+        editingExpense.amount = expense.amount
+        expense = expense.copy(splitBy = newSplitBy, splitType = SplitType.NOT_EQUALLY)
+
+        val newDisbalance = editingExpense.amount - newSplitBy.values.reduce(BigDecimal::add)
+        if (BigDecimal.ZERO.compareTo(newDisbalance) != 0) {
+            val group = groupService.getById(editingExpense.groupId)
+            val model = toEditSplitUnequallyViewModel(editingExpense, group)
+            bot.viewEditSplitUnequally(update, model)
+            throw IllegalArgumentException("Недоплата/переплата не равна нулю: $newDisbalance")
+        }
+
+        expenseService.save(expense)
+        ctx.editingExpenses.remove(expenseId)
+
+        val group = groupService.getById(expense.groupId)
+
+        val model = toOneExpenseViewModel(expense, group)
+        bot.viewOneExpense(update, model, "Изменения сохранены")
+    }
+
+    @OnCallback(prefix = BTN_TMP_CANCEL_EDIT_SPLIT_BY)
+    fun onTmpCancelEditSplitBy(update: Update, ctx: UserContext) {
+        val expenseId = update.callbackQuery.data.removePrefix(BTN_TMP_CANCEL_EDIT_SPLIT_BY).toLong()
+        ctx.editingExpenses.remove(expenseId)
+        val expense = expenseService.getById(expenseId)
+        val group = groupService.getById(expense.groupId)
+
+        val model = toOneExpenseViewModel(expense, group)
+        bot.viewOneExpense(update, model, "")
+    }
+
+    @OnCallback(prefix = BTN_SPLIT_BY_ADD_EQUALLY)
     fun onPutToSplitByEqually(update: Update, ctx: UserContext) {
-        val (expenseId, userId) = update.callbackQuery.data.removePrefix(BTN_PUT_TO_SPLIT_BY_EQUALLY)
+        val (expenseId, userId) = update.callbackQuery.data.removePrefix(BTN_SPLIT_BY_ADD_EQUALLY)
             .split(":").map { it.toLong() }
         val expense = expenseService.getById(expenseId)
 
-        if (expense.splitType != SplitType.EQUALLY) {
+        if (expense.splitType != EQUALLY) {
             throw IllegalArgumentException("Распределение не поровну")
         }
 
         expense.splitBy[userId] = BigDecimal.ZERO
-
         expenseService.save(expense)
 
         setSplitEquallyApprove(expenseId, ctx, update)
     }
 
-    @OnCallback(prefix = BTN_DELETE_FROM_SPLIT_BY_EQUALLY)
+    @OnCallback(prefix = BTN_SPLIT_BY_DELETE_EQUALLY)
     fun onDeleteFromSplitByEqually(update: Update, ctx: UserContext) {
-        val (expenseId, userId) = update.callbackQuery.data.removePrefix(BTN_DELETE_FROM_SPLIT_BY_EQUALLY)
+        val (expenseId, userId) = update.callbackQuery.data.removePrefix(BTN_SPLIT_BY_DELETE_EQUALLY)
             .split(":").map { it.toLong() }
         val expense = expenseService.getById(expenseId)
 
-        if (expense.splitType != SplitType.EQUALLY) {
+        if (expense.splitType != EQUALLY) {
             throw IllegalArgumentException("Распределение не поровну")
         }
 
@@ -657,9 +440,9 @@ class ExpenseHandler(
         setSplitEquallyApprove(expenseId, ctx, update)
     }
 
-    @OnCallback(prefix = BTN_TMP_DELETE_FROM_SPLIT_BY_NOT_EQUALLY)
+    @OnCallback(prefix = BTN_TMP_SPLIT_BY_DELETE)
     fun onDeleteFromSplitByNotEqually(update: Update, ctx: UserContext) {
-        val (expenseId, userId) = update.callbackQuery.data.removePrefix(BTN_TMP_DELETE_FROM_SPLIT_BY_NOT_EQUALLY)
+        val (expenseId, userId) = update.callbackQuery.data.removePrefix(BTN_TMP_SPLIT_BY_DELETE)
             .split(":").map { it.toLong() }
         val expense = ctx.editingExpenses.getOrPut(expenseId) { expenseService.getById(expenseId) }
 
@@ -669,8 +452,310 @@ class ExpenseHandler(
 
         expense.splitBy.remove(userId)
 
-        editSplitByView(expenseId, ctx, update)
+        val group = groupService.getById(expense.groupId)
+        val model = toEditSplitUnequallyViewModel(expense, group)
+        bot.viewEditSplitUnequally(update, model)
     }
 
+    private fun toOneExpenseViewModel(
+        expense: Expense,
+        defaultGroup: Group
+    ): OneExpenseViewModel {
+        val idToUser = defaultGroup.members.associateWith { userService.getById(it) }
+        return OneExpenseViewModel(
+            expense = expense,
+            group = defaultGroup,
+            sortedPaidBy = expense.paidBy
+                .map { (id, amount) -> idToUser[id]!! to amount }
+                .sortedBy { it.first.id },
+            sortedSplitBy = expense.splitBy
+                .map { (userId, amount) -> idToUser[userId]!! to amount }
+                .sortedBy { it.first.id },
+            sortedGroupMembers = idToUser.values.sortedBy { it.id },
+        )
+    }
 
+    private fun toEditPaidByViewModel(
+        editingExpense: Expense,
+        group: Group
+    ) = EditPaidByViewModel(
+        expense = editingExpense,
+        group = group,
+        sortedPaidBy = editingExpense.paidBy
+            .map { (id, amount) -> userService.getById(id) to amount }
+            .sortedBy { it.first.id },
+        disbalance = editingExpense.amount - editingExpense.paidBy.values.reduce(BigDecimal::add),
+        sortedGroupMembers = group.members.map { userService.getById(it) }.sortedBy { it.id },
+    )
+
+    private fun toEditSplitUnequallyViewModel(
+        editingExpense: Expense,
+        group: Group
+    ) = EditSplitUnequallyViewModel (
+        expense = editingExpense,
+        group = group,
+        sortedSplitBy = editingExpense.splitBy
+            .map { (id, amount) -> userService.getById(id) to amount }
+            .sortedBy { it.first.id },
+        disbalance = editingExpense.amount - editingExpense.splitBy.values.reduce(BigDecimal::add),
+        sortedGroupMembers = group.members.map { userService.getById(it) }.sortedBy { it.id },
+    )
+
+    private fun getUser(update: Update) =
+        (userService.findByTelegramId(getFrom(update).id)
+            ?: throw UserNotFoundException(getFrom(update).id))
+}
+
+data class OneExpenseViewModel(
+    val expense: Expense,
+    val group: Group,
+    val sortedPaidBy: List<Pair<BotUserEntity, BigDecimal>>,
+    val sortedSplitBy: List<Pair<BotUserEntity, BigDecimal>>,
+    val sortedGroupMembers: List<BotUserEntity>,
+)
+
+fun BotSender.viewOneExpense(
+    update: Update,
+    viewModel: OneExpenseViewModel,
+    prefix: String = ""
+) {
+    val expense = viewModel.expense
+    val splitBy = viewModel.sortedSplitBy
+    val paidBy = viewModel.sortedPaidBy
+    reply(update)
+        .text(
+            """
+            |${prefix}
+            |
+            |Описание: ${expense.description}
+            |Сумма: ${expense.amount}
+            |Распределение: ${if (expense.splitType == EQUALLY) "поровну" else "не поровну"}
+            |
+            |${
+                TableBuilder('-', " | ")
+                    .column("Заплатил") { idx -> paidBy[idx].first.getViewName() }
+                    .numberColumn("Сумма") { idx -> paidBy[idx].second.toPlainString() }
+                    .build()
+            }
+            |
+            |${
+                TableBuilder('-', " | ")
+                    .column("Участник") { idx -> splitBy[idx].first.getViewName() }
+                    .numberColumn("Сумма") { idx -> splitBy[idx].second.toPlainString() }
+                    .build()
+            }
+            | 
+            """.trimMargin()
+        )
+        .inlineKeyboard(
+            row("✏️Плательщики", BTN_EDIT_PAID_BY + expense.id),
+            row("🤝Разделить поровну", BTN_SET_SPLIT_EQUALLY + expense.id)
+                .filter { expense.splitType != EQUALLY },
+            *viewModel.sortedGroupMembers.map { user ->
+                val userSplitAmount = expense.splitBy[user.id!!] ?: BigDecimal.ZERO
+                val isSplit = expense.splitBy.containsKey(user.id)
+                val nameBtnAction = when (expense.splitType) {
+                    EQUALLY -> if (isSplit) BTN_SPLIT_BY_DELETE_EQUALLY else BTN_SPLIT_BY_ADD_EQUALLY
+                    else -> if (isSplit) BTN_TMP_SPLIT_BY_DELETE else BTN_TMP_SPLIT_BY_EDIT_AMOUNT
+                }
+                val check = if (isSplit) "✅" else ""
+                row(
+                    btn("$check${user.getViewName()}", nameBtnAction + expense.id + ":" + user.id),
+                    btn("$userSplitAmount", BTN_TMP_SPLIT_BY_EDIT_AMOUNT + expense.id + ":" + user.id)
+                )
+            }.toTypedArray(),
+            row("⬅️Расходы группы", BTN_GROUP_EXPENSES + expense.groupId),
+        )
+        .editIfCallbackMessageOrSend()
+}
+
+data class EditPaidByViewModel(
+    val expense: Expense,
+    val group: Group,
+    val sortedPaidBy: List<Pair<BotUserEntity, BigDecimal>>,
+    val disbalance: BigDecimal,
+    val sortedGroupMembers: List<BotUserEntity>,
+)
+
+fun BotSender.viewEditPaidBy(
+    update: Update,
+    viewModel: EditPaidByViewModel,
+    prefix: String = ""
+) {
+    val editingExpense = viewModel.expense
+    val paidBy = viewModel.sortedPaidBy
+    reply(update)
+        .text(
+            """
+            |${prefix}
+            |Расход ${editingExpense.description}
+            |Сумма: ${editingExpense.amount}
+            |
+            |${
+                TableBuilder('-', " | ")
+                    .column("Плательщик") { idx -> paidBy[idx].first.getViewName() }
+                    .numberColumn("Сумма") { idx -> paidBy[idx].second.toPlainString() }
+                    .build()
+            }
+            |
+            |${
+                if (viewModel.disbalance > BigDecimal.ZERO) {
+                    "🔴Недоплата: $viewModel.disbalance"
+                } else if (viewModel.disbalance < BigDecimal.ZERO) {
+                    "🔴Переплата: ${viewModel.disbalance.negate()}"
+                } else ""
+            }
+            """.trimMargin()
+        )
+        .inlineKeyboard(
+            *viewModel.sortedGroupMembers.map { m ->
+                val amount = editingExpense.paidBy[m.id!!] ?: BigDecimal.ZERO
+                val check = if (editingExpense.paidBy.containsKey(m.id)) "✅" else ""
+                val nameBtnAction =
+                    if (editingExpense.paidBy.containsKey(m.id))
+                        BTN_TMP_DELETE_FROM_PAID_BY
+                    else BTN_TMP_EDIT_PAID_AMOUNT
+                row(
+                    btn("$check${m.getViewName()}", nameBtnAction + editingExpense.id + ":" + m.id),
+                    btn("$amount", BTN_TMP_EDIT_PAID_AMOUNT + editingExpense.id + ":" + m.id)
+                )
+            }.toTypedArray(),
+            row("✅Сохранить", BTN_TMP_SAVE_PAID_BY + editingExpense.id),
+            row("⬅️Отменить изменения", BTN_TMP_CANCEL_EDIT_PAID_BY + editingExpense.id),
+        )
+        .editIfCallbackMessageOrSend()
+
+}
+
+fun BotSender.viewInputPaidAmount(
+    update: Update,
+    expense: Expense,
+    user: BotUserEntity,
+    disbalance: BigDecimal,
+    paidBySorted: List<Pair<BotUserEntity, BigDecimal>>,
+    prefix: String = ""
+) {
+    reply(update)
+        .text(
+            """
+                |$prefix
+                |
+                |Расход ${expense.description}
+                |Сумма: ${expense.amount}
+                |${
+                if (disbalance > BigDecimal.ZERO) "🔴Не хватает: $disbalance"
+                else if (disbalance < BigDecimal.ZERO) "🔴Избыток: ${disbalance.negate()}"
+                else ""
+            }
+                |
+                |${
+                TableBuilder('-', " | ")
+                    .column("Заплатил") { idx -> paidBySorted[idx].first.getViewName() }
+                    .numberColumn("Сумма") { idx -> paidBySorted[idx].second.toPlainString() }
+                    .build()
+            }
+                |
+                |Введите сколько заплатил ${user.getViewName()}:
+                """.trimMargin()
+        ).inlineKeyboard(
+            row("Ввести всю сумму", BTN_TMP_EDIT_PAID_AMOUNT_SET_FULL + expense.id + ":" + user.id)
+                .filter { disbalance > BigDecimal.ZERO },
+            row("⬅️Отменить", BTN_EDIT_PAID_BY + expense.id),
+        ).editIfCallbackMessageOrSend()
+}
+
+data class EditSplitUnequallyViewModel(
+    val expense: Expense,
+    val group: Group,
+    val sortedSplitBy: List<Pair<BotUserEntity, BigDecimal>>,
+    val disbalance: BigDecimal,
+    val sortedGroupMembers: List<BotUserEntity>,
+)
+
+fun BotSender.viewEditSplitUnequally(
+    update: Update,
+    viewModel: EditSplitUnequallyViewModel,
+    prefix: String = ""
+) {
+    val editingExpense = viewModel.expense
+    val splitBy = viewModel.sortedSplitBy
+    reply(update)
+        .text(
+            """
+            |${prefix}
+            |Расход ${editingExpense.description}
+            |Сумма: ${editingExpense.amount}
+            |
+            |${
+                TableBuilder('-', " | ")
+                    .column("Участник") { idx -> splitBy[idx].first.getViewName() }
+                    .numberColumn("Сумма") { idx -> splitBy[idx].second.toPlainString() }
+                    .build()
+            }
+            |
+            |${
+                if (viewModel.disbalance > BigDecimal.ZERO) {
+                    "🔴Недоплата: ${viewModel.disbalance}"
+                } else if (viewModel.disbalance < BigDecimal.ZERO) {
+                    "🔴Переплата: ${viewModel.disbalance.negate()}"
+                } else ""
+            }
+            """.trimMargin()
+        )
+        .inlineKeyboard(
+            *viewModel.sortedGroupMembers.map { m ->
+                val amount = editingExpense.splitBy[m.id!!] ?: BigDecimal.ZERO
+                val check = if (editingExpense.splitBy.containsKey(m.id)) "✅" else ""
+                val nameBtnAction =
+                    if (editingExpense.splitBy.containsKey(m.id))
+                        BTN_TMP_SPLIT_BY_DELETE
+                    else BTN_TMP_SPLIT_BY_EDIT_AMOUNT
+                row(
+                    btn("$check${m.getViewName()}", nameBtnAction + editingExpense.id + ":" + m.id),
+                    btn("$amount", BTN_TMP_SPLIT_BY_EDIT_AMOUNT + editingExpense.id + ":" + m.id)
+                )
+            }.toTypedArray(),
+            row("✅Сохранить", BTN_TMP_SAVE_SPLIT_BY + editingExpense.id),
+            row("⬅️Отменить изменения", BTN_TMP_CANCEL_EDIT_SPLIT_BY + editingExpense.id),
+        )
+        .editIfCallbackMessageOrSend()
+}
+
+fun BotSender.viewInputSplitAmount(
+    update: Update,
+    expense: Expense,
+    user: BotUserEntity,
+    disbalance: BigDecimal,
+    splitBySorted: List<Pair<BotUserEntity, BigDecimal>>,
+    fromOneExpenseView: Boolean,
+    prefix: String = ""
+) {
+    reply(update)
+        .text(
+            """
+                |$prefix
+                |
+                |Расход ${expense.description}
+                |Сумма: ${expense.amount}
+                |${
+                if (disbalance > BigDecimal.ZERO) "🔴Не хватает: $disbalance"
+                else if (disbalance < BigDecimal.ZERO) "🔴Избыток: ${disbalance.negate()}"
+                else ""
+            }
+                |
+                |${
+                TableBuilder('-', " | ")
+                    .column("Участник") { idx -> splitBySorted[idx].first.getViewName() }
+                    .numberColumn("Сумма") { idx -> splitBySorted[idx].second.toPlainString() }
+                    .build()
+            }
+                |
+                |Введите сколько должен ${user.getViewName()}:
+                """.trimMargin()
+        ).inlineKeyboard(
+            row("⬅️Отменить", BTN_EDIT_SPLIT_BY + expense.id)
+                .filter { !fromOneExpenseView },
+            row("⬅️Отменить", BTN_VIEW_ONE_EXPENSE + expense.id)
+                .filter { fromOneExpenseView },
+        ).editIfCallbackMessageOrSend()
 }
