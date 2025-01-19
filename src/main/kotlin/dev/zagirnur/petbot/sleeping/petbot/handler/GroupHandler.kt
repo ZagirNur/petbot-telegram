@@ -104,20 +104,25 @@ class GroupHandler(
     }
 
     private fun viewOneGroup(update: Update, ctx: UserContext, group: Group) {
+        val sortedMembers = group.members.sortedBy { it }.map { userService.getById(it) }
         bot.reply(update)
             .text(
                 """
                     | Группа ${group.name}
-                    ${if (ctx.defaultGroup == group.id) "| Установлена как основная" else ""}
-                    | Участники:
-                    | ${group.members.joinToString("\n") { userService.getById(it).getViewName() }}
-                    """.trimMargin()
+                    |${if (ctx.defaultGroup == group.id) "Установлена как основная" else ""}
+                    |
+                    |${
+                    TableBuilder('-', " | ")
+                        .column("Участники") { idx -> sortedMembers[idx].getViewName() }
+                    } 
+                    |""".trimMargin()
             )
             .inlineKeyboard(
                 row("Сделать основной", BTN_SET_MAIN_GROUP + group.id)
                     .filter { ctx.defaultGroup != group.id },
+                row("Расходы", ExpenseHandler.BTN_GROUP_EXPENSES + group.id),
                 row(btnSwitch("Пригласить участника", group.name)),
-                row("Назад", BTN_VIEW_ALL_GROUPS)
+                row("⬅️ Назад", BTN_VIEW_ALL_GROUPS)
             )
             .editIfCallbackMessageOrSend()
     }
