@@ -63,6 +63,8 @@ class ExpenseHandler(
         const val BTN_TMP_CANCEL_EDIT_SPLIT_BY = "TMP_CANCEL_EDIT_SPLIT_BY:"
         const val BTN_TMP_SAVE_PAID_BY = "TMP_SAVE_PAID_BY:"
         const val BTN_TMP_SAVE_SPLIT_BY = "TMP_SAVE_SPLIT_BY:"
+        const val BTN_ADD_NEW_EXPENSE_TO_GROUP = "ADD_NEW_EXPENSE_TO_GROUP:"
+
 
         const val BTN_SPLIT_BY_DELETE_EQUALLY = "DELETE_FROM_SPLIT_BY:"
         const val BTN_TMP_SPLIT_BY_DELETE = "DELETE_FROM_SPLIT_BY_NOT_EQUALLY:"
@@ -73,6 +75,7 @@ class ExpenseHandler(
         // chat states
         const val STT_EDIT_PAID_AMOUNT = "EDIT_PAID_AMOUNT:"
         const val STT_EDIT_SPLIT_AMOUNT = "EDIT_SPLIT_AMOUNT:"
+        const val STT_WAITING_NEW_EXPENSE_AMOUNT = "WAITING_NEW_EXPENSE_AMOUNT:"
 
     }
 
@@ -124,18 +127,57 @@ class ExpenseHandler(
                 |
                 |${
                     TableBuilder('-', " | ")
-                        .column("Описание") { idx -> expenses[idx].description }
+                        .column("Название") { idx -> expenses[idx].description }
                         .numberColumn("Сумма") { idx -> expenses[idx].amount.toPlainString() }
+                        .column("Дата") { idx -> expenses[idx].createdAt.toLocalDate().toString() }
                         .build()
                 }
-                """.trimMargin()
+                |""".trimMargin()
             )
             .inlineKeyboard(
+                row("➕Добавить расход", BTN_ADD_NEW_EXPENSE_TO_GROUP + group.id),
                 *expenses.map {
-                    row(it.description, BTN_VIEW_ONE_EXPENSE + it.id)
-                }.toTypedArray(),
+                    btn(it.description, BTN_VIEW_ONE_EXPENSE + it.id)
+                }.chunked(2).toTypedArray(),
+                row("⬅️Список групп", GroupHandler.BTN_VIEW_ALL_GROUPS),
             )
             .editIfCallbackMessageOrSend()
+    }
+
+    @OnCallback(prefix = BTN_ADD_NEW_EXPENSE_TO_GROUP)
+    fun onAddNewExpenseToGroup(update: Update, ctx: UserContext, btn: StringUpdateData) {
+        val group = groupService.getById(btn.data.toLong())
+
+        ctx.state = STT_WAITING_NEW_EXPENSE_AMOUNT + group.id
+        bot.reply(update)
+            .text(
+                """
+                |Группа: ${group.name}
+                |Введите сумму и описание нового расхода через пробел:
+                """.trimMargin()
+            )
+            .editIfCallbackMessageOrSend()
+    }
+
+    //language=RegExp
+    @OnMessage(state = STT_WAITING_NEW_EXPENSE_AMOUNT, regexp = """^\w?\s?[\d., ]+\D{0,3}\s.*$""")
+    fun onNewExpenseAmount(update: Update, ctx: UserContext) {
+        val groupId = ctx.state.removePrefix(STT_WAITING_NEW_EXPENSE_AMOUNT).toLong()
+        val group = groupService.getById(groupId)
+        val user = getUser(update)
+
+        val (amount, description) = update.message.text.split(" ", limit = 2)
+        val newExpense = expenseService.createNew(
+            groupId = group.id,
+            amount = amount.toBigDecimal(),
+            description = description,
+            paidBy = mapOf(user.id!! to amount.toBigDecimal()),
+            splitBy = mapOf(user.id!! to amount.toBigDecimal()),
+        )
+
+        ctx.state = ""
+        val model = toOneExpenseViewModel(newExpense, group)
+        bot.viewOneExpense(update, model, "Добавлен новый расход")
     }
 
     @OnCallback(prefix = BTN_VIEW_ONE_EXPENSE)
@@ -491,7 +533,7 @@ class ExpenseHandler(
     private fun toEditSplitUnequallyViewModel(
         editingExpense: Expense,
         group: Group
-    ) = EditSplitUnequallyViewModel (
+    ) = EditSplitUnequallyViewModel(
         expense = editingExpense,
         group = group,
         sortedSplitBy = editingExpense.splitBy

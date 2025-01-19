@@ -3,6 +3,7 @@ package dev.zagirnur.petbot.sleeping.petbot.handler
 import dev.zagirnur.petbot.sdk.BotSender
 import dev.zagirnur.petbot.sdk.BotUtils.getFrom
 import dev.zagirnur.petbot.sdk.ReplyBuilder.*
+import dev.zagirnur.petbot.sdk.TableBuilder
 import dev.zagirnur.petbot.sdk.annotations.OnCallback
 import dev.zagirnur.petbot.sdk.annotations.OnInlineQuery
 import dev.zagirnur.petbot.sdk.annotations.OnMessage
@@ -44,14 +45,25 @@ class GroupHandler(
             ?: throw UserNotFoundException(getFrom(update).id)
 
         val groups = groupService.findAllByUserId(user.id!!)
+            .sortedBy { it.name }
         if (groups.isEmpty()) {
             return enterNewGroupName(update, ctx, "Кажется у вас нет групп. \n\n")
         }
 
         bot.reply(update)
-            .text("Ваши группы:\n\n" + groups.joinToString("\n") { it.name + " " + it.members.size })
+            .text(
+                """
+                |Ваши группы:
+                |
+                |${
+                    TableBuilder('-', " | ")
+                        .column("Название") { idx -> groups[idx].name }
+                        .column("Участников") { idx -> groups[idx].members.size.toString() }
+                }
+                """.trimMargin()
+            )
             .inlineKeyboard(
-                row("Новая группа", BTN_ENTER_NEW_GROUP_NAME),
+                row("➕ Создать новую группу", BTN_ENTER_NEW_GROUP_NAME),
                 *groups.map {
                     btn(it.name, BTN_VIEW_ONE_GROUP + it.id)
                 }.chunked(3).toTypedArray()
@@ -95,11 +107,11 @@ class GroupHandler(
         bot.reply(update)
             .text(
                 """
-                | Группа ${group.name}
-                ${if (ctx.defaultGroup == group.id) "| Установлена как основная" else ""}
-                | Участники: 
-                | ${group.members.joinToString("\n") { userService.getById(it).getViewName() }}
-                """.trimMargin()
+                    | Группа ${group.name}
+                    ${if (ctx.defaultGroup == group.id) "| Установлена как основная" else ""}
+                    | Участники:
+                    | ${group.members.joinToString("\n") { userService.getById(it).getViewName() }}
+                    """.trimMargin()
             )
             .inlineKeyboard(
                 row("Сделать основной", BTN_SET_MAIN_GROUP + group.id)
